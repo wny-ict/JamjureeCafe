@@ -96,9 +96,9 @@ export default function Login({ onLogin, passwords }) {
           </button>
         </form>
 
-        <div style={{ marginTop: '2rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+        <div style={{ marginTop: '2rem', fontSize: '0.75rem', color: 'var(--text-muted)', lineHeight: 1.6 }}>
           <p>© {new Date().getFullYear()} Jamjuree Cafe • โรงเรียนวังน้ำเย็นวิทยาคม</p>
-          <p>Developer : PANITTHA BOONYONG</p>
+          <p style={{ marginTop: '0.25rem', opacity: 0.8 }}>Developer: PANITTHA BOONYONG</p>
         </div>
       </div>
     </div>
