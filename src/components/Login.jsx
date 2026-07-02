@@ -98,6 +98,7 @@ export default function Login({ onLogin, passwords }) {
 
         <div style={{ marginTop: '2rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
           <p>© {new Date().getFullYear()} Jamjuree Cafe • โรงเรียนวังน้ำเย็นวิทยาคม</p>
+          <p>Developer : PANITTHA BOONYONG</p>
         </div>
       </div>
     </div>
