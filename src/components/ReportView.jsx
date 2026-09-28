@@ -10,7 +10,8 @@ import {
   Info,
   CheckCircle2,
   TrendingUp,
-  TrendingDown
+  TrendingDown,
+  FileCheck
 } from 'lucide-react';
 import { formatThaiDate } from './Transactions';
 import schoolLogo from '../school_logo.png';
@@ -28,12 +29,13 @@ export default function ReportView({
   const setReportType = propSetReportType !== undefined ? propSetReportType : localSetReportType;
   
   // รูปแบบการแสดงผลรายการสำหรับตรวจสอบบัญชี:
-  // 'split' = แยกตารางรายรับ และ ตารางรายจ่าย (แนะนำสำหรับการตรวจบัญชี)
+  // 'school_standard' = แบบ 6 ช่องมาตรฐานตามใบข้อเสนอแนะ: วันที่ | รายการ | รายรับ | รายจ่าย | เงินคงเหลือ | หมายเหตุ (ค่าเริ่มต้น)
+  // 'split' = แยกตารางรายรับ และ ตารางรายจ่าย
   // 'side_by_side' = แยก 2 ฝั่ง ซ้าย-ขวา (แบบสมุดบัญชีมาตรฐาน)
-  // 'combined' = รวมทุกรายการเรียงตามลำดับเวลา
   // 'income_only' = เฉพาะรายการรายรับ
   // 'expense_only' = เฉพาะรายการรายจ่าย
-  const [viewMode, setViewMode] = useState('split');
+  // 'combined' = รวมตามลำดับเวลา
+  const [viewMode, setViewMode] = useState('school_standard');
 
   // สำหรับช่วงวันที่เลือก
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
@@ -171,32 +173,45 @@ export default function ReportView({
     setFilteredData(filtered);
   }, [reportType, selectedDate, selectedMonth, selectedYear, selectedQuarter, transactions]);
 
-  // เช็คและคำนวณยอดยกมา
-  const getBroughtForwardAmount = () => {
-    let bf = 0;
-    filteredData.forEach(t => {
-      if (isBroughtForward(t.description)) {
-        if (t.type === 'income') {
-          bf += t.amount;
-        } else {
-          bf -= t.amount;
-        }
+  // คำนวณยอดยกมาจากงวดก่อนหน้าจริง
+  const getStartingBroughtForward = () => {
+    // 1. เช็คว่ามีรายการยอดยกมาในงวดนี้บันทึกอยู่หรือไม่
+    const explicitBfTx = filteredData.find(t => isBroughtForward(t.description));
+    if (explicitBfTx) {
+      return explicitBfTx.amount;
+    }
+
+    // 2. ถ้าไม่มี ให้คำนวณจากยอดธุรกรรมก่อนหน้า dateRange.start ทั้งหมด
+    if (dateRange.start) {
+      const priorTransactions = transactions.filter(t => t.date && t.date < dateRange.start);
+      if (priorTransactions.length > 0) {
+        const priorIncome = priorTransactions
+          .filter(t => t.type === 'income' && !isBroughtForward(t.description))
+          .reduce((sum, t) => sum + t.amount, 0);
+        const priorExpense = priorTransactions
+          .filter(t => t.type === 'expense' && !isBroughtForward(t.description))
+          .reduce((sum, t) => sum + t.amount, 0);
+        const priorBf = priorTransactions
+          .filter(t => isBroughtForward(t.description))
+          .reduce((sum, t) => sum + (t.type === 'income' ? t.amount : -t.amount), 0);
+        return priorIncome - priorExpense + priorBf;
       }
-    });
-    return bf;
+    }
+
+    return 0;
   };
 
-  const broughtForwardAmount = getBroughtForwardAmount();
+  const startingBalance = getStartingBroughtForward();
 
   // แยกรายการธุรกรรมออกเป็น รายรับ, รายจ่าย และ ยอดยกมา
   const incomeList = filteredData.filter(t => t.type === 'income' && !isBroughtForward(t.description));
   const expenseList = filteredData.filter(t => t.type === 'expense' && !isBroughtForward(t.description));
-  const broughtForwardList = filteredData.filter(t => isBroughtForward(t.description));
+  const normalTransactions = filteredData.filter(t => !isBroughtForward(t.description));
 
   const totalIncomeAmount = incomeList.reduce((sum, t) => sum + t.amount, 0);
   const totalExpenseAmount = expenseList.reduce((sum, t) => sum + t.amount, 0);
 
-  // คำนวณสรุปการเงินของรายงาน (ไม่นับรวมยอดยกมาในรายรับ/รายจ่ายหลักเพื่อแสดงกำไรขาดทุนจริงประจำช่วงเวลา)
+  // คำนวณสรุปการเงินของรายงาน (ไม่นับรวมยอดยกมาในรายรับ/รายจ่ายหลักเพื่อแสดงกำไรขาดทุนจริงประจำงวด)
   const incomeSum = reportType === 'summary'
     ? monthlySummaryList.reduce((sum, m) => sum + m.income, 0)
     : totalIncomeAmount;
@@ -209,12 +224,41 @@ export default function ReportView({
 
   const balanceSum = reportType === 'summary'
     ? (monthlySummaryList.length > 0 ? monthlySummaryList[monthlySummaryList.length - 1].balance : 0)
-    : (incomeSum - expenseSum + broughtForwardAmount);
+    : (startingBalance + netPeriodMargin);
+
+  // คำนวณจำแนกเงินสดและเงินโอนเข้าบัญชี (ตามหมายเหตุในใบแนะนำ)
+  const cashIncome = incomeList
+    .filter(t => (t.description && (t.description.includes('สด') || t.description.includes('เงินสด'))) || (t.note && t.note.includes('สด')))
+    .reduce((sum, t) => sum + t.amount, 0);
+
+  const bankIncome = incomeList
+    .filter(t => (t.description && (t.description.includes('โอน') || t.description.includes('ธนาคาร'))) || (t.note && t.note.includes('โอน')))
+    .reduce((sum, t) => sum + t.amount, 0);
+
+  const otherIncome = Math.max(0, totalIncomeAmount - cashIncome - bankIncome);
+  const effectiveCashIncome = cashIncome + otherIncome;
+
+  const bankExpense = expenseList
+    .filter(t => (t.description && (t.description.includes('โอน') || t.description.includes('ธนาคาร'))) || (t.note && t.note.includes('โอน')))
+    .reduce((sum, t) => sum + t.amount, 0);
+  const cashExpense = totalExpenseAmount - bankExpense;
+
+  let cashRemaining = Math.max(0, effectiveCashIncome - cashExpense);
+  let bankRemaining = balanceSum - cashRemaining;
+  if (bankRemaining < 0) {
+    bankRemaining = Math.max(0, bankIncome - bankExpense);
+    cashRemaining = balanceSum - bankRemaining;
+  }
 
   const thaiMonthsFull = [
     'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
     'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'
   ];
+
+  // ชื่อเดือนก่อนหน้าสำหรับแสดงในบรรทัดยอดยกมา
+  const prevMonthIdx = (selectedMonth - 2 + 12) % 12;
+  const prevMonthYear = selectedMonth === 1 ? selectedYear - 1 + 543 : selectedYear + 543;
+  const prevMonthLabel = `${thaiMonthsFull[prevMonthIdx]} ${prevMonthYear}`;
 
   // พิมพ์หัวข้อรายงานในภาษาไทยให้เป็นทางการ
   const getReportTitle = () => {
@@ -235,8 +279,10 @@ export default function ReportView({
 
   const getViewModeLabel = () => {
     switch (viewMode) {
+      case 'school_standard':
+        return 'แบบมาตรฐานโรงเรียน (ช่องรายรับ - รายจ่าย - เงินคงเหลือ)';
       case 'split':
-        return 'รูปแบบแยกตารางรายรับ - รายจ่าย';
+        return 'รูปแบบแยก 2 ตาราง (รายรับ - รายจ่าย)';
       case 'side_by_side':
         return 'รูปแบบบัญชีแยก 2 ฝั่ง (รายรับซ้าย - รายจ่ายขวา)';
       case 'income_only':
@@ -254,6 +300,9 @@ export default function ReportView({
   };
 
   const maxDualRows = Math.max(incomeList.length, expenseList.length, 1);
+
+  // คำนวณยอดเงินคงเหลือสะสมทีละบรรทัด (Running Balance) สำหรับแบบ 6 ช่อง
+  let standardRunningBalance = startingBalance;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
@@ -383,7 +432,7 @@ export default function ReportView({
           </button>
         </div>
 
-        {/* แถวที่ 2: ตัวเลือกรูปแบบการแสดงผลแยกรายรับ-รายจ่าย สำหรับตรวจบัญชี */}
+        {/* แถวที่ 2: ตัวเลือกรูปแบบตาราง (ตามข้อเสนอแนะตรวจบัญชี) */}
         {reportType !== 'summary' ? (
           <div style={{ 
             display: 'flex', 
@@ -397,38 +446,37 @@ export default function ReportView({
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
               <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--primary-brown)', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
                 <Layers size={15} />
-                รูปแบบการแสดงผล (ตรวจบัญชี):
+                รูปแบบตาราง:
               </span>
               <div className="report-view-toggle">
                 <button
                   type="button"
+                  className={`report-toggle-btn ${viewMode === 'school_standard' ? 'active' : ''}`}
+                  onClick={() => setViewMode('school_standard')}
+                  title="แบบ 6 ช่องมาตรฐานตามใบข้อแนะนำ: วันที่ | รายการ | รายรับ | รายจ่าย | เงินคงเหลือ | หมายเหตุ"
+                >
+                  <span>📋 แบบ 6 ช่องมาตรฐาน (รายรับ-รายจ่าย-คงเหลือ)</span>
+                </button>
+                <button
+                  type="button"
                   className={`report-toggle-btn ${viewMode === 'split' ? 'active' : ''}`}
                   onClick={() => setViewMode('split')}
-                  title="แยกเป็น 2 ตาราง: ตารางรายรับ และ ตารางรายจ่าย พร้อมยอดรวมแต่ละหมวด"
+                  title="แยกเป็น 2 ตาราง: ตารางรายรับ และ ตารางรายจ่าย"
                 >
-                  <span>📑 แยกตาราง รายรับ - รายจ่าย (แนะนำ)</span>
+                  <span>📑 แยก 2 ตาราง</span>
                 </button>
                 <button
                   type="button"
                   className={`report-toggle-btn ${viewMode === 'side_by_side' ? 'active' : ''}`}
                   onClick={() => setViewMode('side_by_side')}
-                  title="แสดงเทียบเคียง 2 ฝั่ง ซ้ายเป็นรายรับ ขวาเป็นรายจ่าย แบบสมุดบัญชีมาตรฐาน"
+                  title="แสดงเทียบเคียง 2 ฝั่ง ซ้ายเป็นรายรับ ขวาเป็นรายจ่าย"
                 >
                   <span>⚖️ แยก 2 ฝั่ง ซ้าย-ขวา</span>
                 </button>
                 <button
                   type="button"
-                  className={`report-toggle-btn ${viewMode === 'combined' ? 'active' : ''}`}
-                  onClick={() => setViewMode('combined')}
-                  title="รวมทุกรายการเรียงตามวันที่ทำรายการ"
-                >
-                  <span>📅 รวมตามวันที่</span>
-                </button>
-                <button
-                  type="button"
                   className={`report-toggle-btn ${viewMode === 'income_only' ? 'active' : ''}`}
                   onClick={() => setViewMode('income_only')}
-                  title="แสดงเฉพาะรายการรายรับ เหมาะสำหรับตรวจใบเสร็จรับเงิน"
                 >
                   <span>📥 เฉพาะรายรับ</span>
                 </button>
@@ -436,7 +484,6 @@ export default function ReportView({
                   type="button"
                   className={`report-toggle-btn ${viewMode === 'expense_only' ? 'active' : ''}`}
                   onClick={() => setViewMode('expense_only')}
-                  title="แสดงเฉพาะรายการรายจ่าย เหมาะสำหรับตรวจใบสำคัญจ่ายและบิลซื้อของ"
                 >
                   <span>📤 เฉพาะรายจ่าย</span>
                 </button>
@@ -444,7 +491,7 @@ export default function ReportView({
             </div>
             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
               <Info size={13} />
-              <span>เลือกรูปแบบตารางที่ต้องการ แล้วกดพิมพ์ PDF ได้ทันที</span>
+              <span>ปรับแบบฟอร์มตามข้อแนะนำตรวจบัญชีเรียบร้อย</span>
             </div>
           </div>
         ) : (
@@ -466,10 +513,10 @@ export default function ReportView({
               style={{ padding: '0.35rem 0.85rem', fontSize: '0.8rem' }}
               onClick={() => {
                 setReportType('yearly');
-                setViewMode('split');
+                setViewMode('school_standard');
               }}
             >
-              <span>📑 ดูแจกแจงแยกรายรับ-รายจ่ายทั้งปี พ.ศ. {selectedYear + 543}</span>
+              <span>📋 ดูตาราง 6 ช่องทั้งปี พ.ศ. {selectedYear + 543}</span>
             </button>
           </div>
         )}
@@ -481,11 +528,11 @@ export default function ReportView({
         {/* หัวกระดาษเอกสาร */}
         <div className="report-header-layout">
           <img src={schoolLogo} className="school-logo-img" alt="โลโก้โรงเรียน" />
-          <h2 style={{ fontSize: '1.4rem', fontWeight: 700, color: '#3E2723', marginBottom: '0.25rem' }}>
-            รายงานบัญชีรายรับ-รายจ่ายร้านกาแฟ Jamjuree Cafe
+          <h2 style={{ fontSize: '1.35rem', fontWeight: 700, color: '#3E2723', marginBottom: '0.25rem' }}>
+            รายงานบัญชีรายรับ-รายจ่าย ร้านคาเฟ่ (Jamjuree Café)
           </h2>
-          <h3 style={{ fontSize: '1.05rem', fontWeight: 500, color: '#5D4037', marginBottom: '0.5rem' }}>
-            โรงเรียนวังน้ำเย็นวิทยาคม สำนักงานเขตพื้นที่การศึกษามัธยมศึกษาสระแก้ว
+          <h3 style={{ fontSize: '1.05rem', fontWeight: 500, color: '#5D4037', marginBottom: '0.4rem' }}>
+            โรงเรียนวังน้ำเย็นวิทยาคม จังหวัดสระแก้ว
           </h3>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
             {getReportTitle()}
@@ -497,67 +544,149 @@ export default function ReportView({
           </p>
         </div>
 
-        {/* การแจ้งเตือนยอดยกมา (ถ้ามี) */}
-        {broughtForwardAmount !== 0 && reportType !== 'summary' && (
-          <div className="report-bf-notice">
-            📌 <strong>ยอดยกมาจากงวดก่อนหน้า:</strong> มีการบันทึกยอดยกมาจำนวน {broughtForwardAmount >= 0 ? '+' : ''}{broughtForwardAmount.toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท (นำไปคำนวณในยอดเงินคงเหลือสุทธิ ไม่รวมเป็นรายรับ/รายจ่ายของงวดนี้ เพื่อความถูกต้องในการตรวจสอบบัญชี)
-          </div>
-        )}
-
-        {/* 1. โหมดรายงานสรุปยอดบัญชีรายเดือน (Summary Table) */}
-        {reportType === 'summary' && (
+        {/* 1. โหมดแบบ 6 ช่องมาตรฐานตามใบข้อเสนอแนะตรวจบัญชี (School Standard Ledger) */}
+        {reportType !== 'summary' && viewMode === 'school_standard' && (
           <div style={{ overflowX: 'auto', width: '100%', marginBottom: '1.5rem' }}>
-            <table className="report-table">
+            <table className="report-table-standard">
               <thead>
                 <tr>
-                  <th style={{ width: '25%' }}>เดือน</th>
-                  <th style={{ width: '20%', textAlign: 'right' }}>รายรับจริง (บาท)</th>
-                  <th style={{ width: '20%', textAlign: 'right' }}>รายจ่ายจริง (บาท)</th>
-                  <th style={{ width: '15%', textAlign: 'right' }}>ส่วนต่างประจำเดือน</th>
-                  <th style={{ width: '20%', textAlign: 'right' }}>ยอดคงเหลือสะสมสิ้นเดือน</th>
+                  <th style={{ width: '14%', textAlign: 'center' }}>วัน/เดือน/ปี</th>
+                  <th style={{ width: '32%', textAlign: 'center' }}>รายการ</th>
+                  <th style={{ width: '13%', textAlign: 'center' }}>รายรับ</th>
+                  <th style={{ width: '13%', textAlign: 'center' }}>รายจ่าย</th>
+                  <th style={{ width: '14%', textAlign: 'center' }}>เงินคงเหลือ</th>
+                  <th style={{ width: '14%', textAlign: 'center' }}>หมายเหตุ</th>
                 </tr>
               </thead>
               <tbody>
-                {monthlySummaryList.length === 0 ? (
+                {/* แถวที่ 1: ยอดยกมาจากงวดก่อนหน้า (แสดงเหมือนในเอกสารตัวอย่าง) */}
+                <tr style={{ backgroundColor: '#FAF8F5' }}>
+                  <td style={{ textAlign: 'center' }}>
+                    {formatThaiDate(dateRange.start) || 'ต้นงวด'}
+                  </td>
+                  <td style={{ fontWeight: 600 }}>
+                    ยอดยกมา จากเดือน {prevMonthLabel}
+                  </td>
+                  <td style={{ textAlign: 'right' }}>
+                    {startingBalance > 0 ? startingBalance.toLocaleString('th-TH', { minimumFractionDigits: 2 }) : '-'}
+                  </td>
+                  <td style={{ textAlign: 'center', color: 'var(--text-muted)' }}>-</td>
+                  <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--primary-dark)' }}>
+                    {startingBalance.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                  </td>
+                  <td style={{ textAlign: 'center', color: 'var(--text-muted)' }}>-</td>
+                </tr>
+
+                {/* รายการธุรกรรมตามลำดับวันเวลา */}
+                {normalTransactions.length === 0 ? (
                   <tr>
-                    <td colSpan="5" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '3rem' }}>
-                      📭 ไม่มีข้อมูลประวัติรายเดือนเพื่อสรุปยอดในปีนี้
+                    <td colSpan="6" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2.5rem' }}>
+                      📭 ไม่มีรายการธุรกรรมที่บันทึกไว้ในช่วงเวลานี้
                     </td>
                   </tr>
                 ) : (
-                  monthlySummaryList.map((m) => (
-                    <tr key={m.key}>
-                      <td style={{ fontWeight: 500 }}>{m.label}</td>
-                      <td style={{ textAlign: 'right', color: 'var(--success-dark, #2e7d32)', fontWeight: 500 }}>
-                        {m.income.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
-                      </td>
-                      <td style={{ textAlign: 'right', color: 'var(--danger-dark, #c62828)', fontWeight: 500 }}>
-                        {m.expense.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
-                      </td>
-                      <td style={{ textAlign: 'right', fontWeight: 600, color: m.net >= 0 ? 'var(--success-dark, #2e7d32)' : 'var(--danger-dark, #c62828)' }}>
-                        {m.net >= 0 ? '+' : ''}{m.net.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
-                      </td>
-                      <td style={{ textAlign: 'right', fontWeight: 700, color: m.balance >= 0 ? 'var(--primary-dark)' : 'var(--danger-dark, #c62828)' }}>
-                        {m.balance.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
-                      </td>
-                    </tr>
-                  ))
+                  normalTransactions.map((t, idx) => {
+                    const prevDate = idx > 0 ? normalTransactions[idx - 1].date : null;
+                    const isNewDate = t.date !== prevDate;
+                    
+                    if (t.type === 'income') {
+                      standardRunningBalance += t.amount;
+                    } else {
+                      standardRunningBalance -= t.amount;
+                    }
+
+                    // จัดการข้อความหมายเหตุ: ถ้าผู้ใช้กรอก note ให้แสดง note, ถ้าว่างและเป็นรายจ่ายหรือโอน ให้ใส่ 'หลักฐาน' ตามข้อแนะนำในภาพ
+                    const noteText = t.note ? t.note : (t.type === 'expense' || (t.description && t.description.includes('โอน')) ? 'หลักฐาน' : '');
+
+                    return (
+                      <tr key={t.id || idx}>
+                        {/* แสดงวันที่เฉพาะรายการแรกของวันนั้นๆ (เหมือนในเอกสารตัวอย่าง) */}
+                        <td style={{ textAlign: 'center', fontWeight: isNewDate ? 500 : 400, color: isNewDate ? 'inherit' : 'transparent' }}>
+                          {isNewDate ? formatThaiDate(t.date) : ''}
+                        </td>
+                        <td>
+                          <span style={{ fontWeight: 500 }}>{t.description}</span>
+                        </td>
+                        {/* ช่องรายรับ */}
+                        <td style={{ textAlign: 'right', color: t.type === 'income' ? 'var(--success-dark, #1565C0)' : 'inherit', fontWeight: t.type === 'income' ? 500 : 400 }}>
+                          {t.type === 'income' ? t.amount.toLocaleString('th-TH', { minimumFractionDigits: 2 }) : '-'}
+                        </td>
+                        {/* ช่องรายจ่าย */}
+                        <td style={{ textAlign: 'right', color: t.type === 'expense' ? 'var(--danger-dark, #C2185B)' : 'inherit', fontWeight: t.type === 'expense' ? 500 : 400 }}>
+                          {t.type === 'expense' ? t.amount.toLocaleString('th-TH', { minimumFractionDigits: 2 }) : '-'}
+                        </td>
+                        {/* ช่องเงินคงเหลือสะสม (Running Balance) */}
+                        <td style={{ textAlign: 'right', fontWeight: 600, color: standardRunningBalance >= 0 ? '#1B2E3C' : 'var(--danger-dark)' }}>
+                          {standardRunningBalance.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                        </td>
+                        {/* ช่องหมายเหตุ */}
+                        <td style={{ textAlign: 'center', fontSize: '0.85rem', color: noteText === 'หลักฐาน' ? '#5D4037' : 'inherit' }}>
+                          {noteText || '-'}
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
+
+              {/* ส่วนท้ายตาราง: สรุปผลยอดเงินตามแบบฟอร์มข้อแนะนำในรูปภาพ */}
               <tfoot>
-                <tr className="report-subtotal-row">
-                  <td style={{ fontWeight: 700 }}>รวมทั้งสิ้นทั้งปี (12 เดือน)</td>
-                  <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--success-dark, #2e7d32)' }}>
-                    {incomeSum.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                {/* แถวหัวข้อสรุป */}
+                <tr style={{ backgroundColor: '#F5F0EA' }}>
+                  <td colSpan="2" style={{ textAlign: 'center', fontWeight: 'bold' }}>
+                    สรุป
                   </td>
-                  <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--danger-dark, #c62828)' }}>
-                    {expenseSum.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                  <td style={{ textAlign: 'center', fontWeight: 600, fontSize: '0.82rem', backgroundColor: '#EBF3FB' }}>
+                    รวมรับ {reportType === 'monthly' ? 'เดือนนี้' : 'งวดนี้'}
                   </td>
-                  <td style={{ textAlign: 'right', fontWeight: 700, color: netPeriodMargin >= 0 ? 'var(--success-dark, #2e7d32)' : 'var(--danger-dark, #c62828)' }}>
-                    {netPeriodMargin >= 0 ? '+' : ''}{netPeriodMargin.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                  <td style={{ textAlign: 'center', fontWeight: 600, fontSize: '0.82rem', backgroundColor: '#FDEEF2' }}>
+                    รวมจ่าย {reportType === 'monthly' ? 'เดือนนี้' : 'งวดนี้'}
                   </td>
-                  <td style={{ textAlign: 'right', fontWeight: 700, color: balanceSum >= 0 ? 'var(--primary-dark)' : 'var(--danger-dark, #c62828)' }}>
-                    {balanceSum.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                  <td style={{ textAlign: 'center', fontWeight: 600, fontSize: '0.82rem', backgroundColor: '#EBF3FB' }}>
+                    คงเหลือ{reportType === 'monthly' ? 'เดือนนี้' : 'งวดนี้'}
+                  </td>
+                  <td style={{ textAlign: 'center', fontWeight: 600, fontSize: '0.82rem', backgroundColor: '#F3ECF8' }}>
+                    คงเหลือรวม
+                  </td>
+                </tr>
+
+                {/* แถวตัวเลขสรุป */}
+                <tr>
+                  <td colSpan="2" style={{ textAlign: 'center' }}></td>
+                  <td style={{ textAlign: 'right', fontWeight: 'bold', color: '#1565C0', fontSize: '0.95rem' }}>
+                    {totalIncomeAmount.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                  </td>
+                  <td style={{ textAlign: 'right', fontWeight: 'bold', color: '#C2185B', fontSize: '0.95rem' }}>
+                    {totalExpenseAmount.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                  </td>
+                  <td style={{ textAlign: 'right', fontWeight: 'bold', color: '#1565C0', fontSize: '0.95rem' }}>
+                    {netPeriodMargin.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                  </td>
+                  <td style={{ textAlign: 'right', fontWeight: 'bold', color: '#4A148C', fontSize: '1rem' }}>
+                    {standardRunningBalance.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                  </td>
+                </tr>
+
+                {/* แถวจำแนกเงินสดและบัญชีธนาคาร (ตามที่ระบุในวงปีกกาของภาพตัวอย่าง) */}
+                <tr style={{ fontSize: '0.85rem' }}>
+                  <td colSpan="4" style={{ textAlign: 'right', color: 'var(--text-muted)' }}>
+                    จำแนกยอดเงินคงเหลือ:
+                  </td>
+                  <td style={{ textAlign: 'center', fontWeight: 600, backgroundColor: '#FAF8F5' }}>
+                    เงินสด
+                  </td>
+                  <td style={{ textAlign: 'right', fontWeight: 600 }}>
+                    {cashRemaining.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                  </td>
+                </tr>
+                <tr style={{ fontSize: '0.85rem' }}>
+                  <td colSpan="4" style={{ textAlign: 'right', color: 'var(--text-muted)' }}>
+                  </td>
+                  <td style={{ textAlign: 'center', fontWeight: 600, backgroundColor: '#FAF8F5' }}>
+                    ในบัญชีธนาคาร
+                  </td>
+                  <td style={{ textAlign: 'right', fontWeight: 600 }}>
+                    {bankRemaining.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
                   </td>
                 </tr>
               </tfoot>
@@ -565,11 +694,11 @@ export default function ReportView({
           </div>
         )}
 
-        {/* 2. โหมดแยกตาราง: รายรับ และ รายจ่าย (Split Tables) - แนะนำสำหรับการตรวจบัญชี */}
+        {/* 2. โหมดแยกตาราง: รายรับ และ รายจ่าย (Split Tables) */}
         {reportType !== 'summary' && viewMode === 'split' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem', marginBottom: '1.5rem' }}>
             
-            {/* 2.1 ตารางรายการรายรับ */}
+            {/* ตารางรายการรายรับ */}
             <div>
               <div className="report-table-header income">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -637,7 +766,7 @@ export default function ReportView({
               </div>
             </div>
 
-            {/* 2.2 ตารางรายการรายจ่าย */}
+            {/* ตารางรายการรายจ่าย */}
             <div>
               <div className="report-table-header expense">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -708,7 +837,7 @@ export default function ReportView({
           </div>
         )}
 
-        {/* 3. โหมดแยก 2 ฝั่ง ซ้าย-ขวา (Side-by-Side Dual Ledger) แบบสมุดบัญชีมาตรฐาน */}
+        {/* 3. โหมดแยก 2 ฝั่ง ซ้าย-ขวา (Side-by-Side Dual Ledger) */}
         {reportType !== 'summary' && viewMode === 'side_by_side' && (
           <div style={{ overflowX: 'auto', width: '100%', marginBottom: '1.5rem' }}>
             <table className="report-table report-dual-table">
@@ -722,12 +851,10 @@ export default function ReportView({
                   </th>
                 </tr>
                 <tr>
-                  {/* คอลัมน์รายรับ */}
                   <th style={{ width: '5%', textAlign: 'center' }}>ที่</th>
                   <th style={{ width: '13%' }}>วัน/เดือน/ปี</th>
                   <th style={{ width: '20%' }}>รายการรายรับ</th>
                   <th style={{ width: '12%', textAlign: 'right' }}>จำนวนเงิน (บาท)</th>
-                  {/* คอลัมน์รายจ่าย */}
                   <th style={{ width: '5%', textAlign: 'center' }}>ที่</th>
                   <th style={{ width: '13%' }}>วัน/เดือน/ปี</th>
                   <th style={{ width: '20%' }}>รายการรายจ่าย</th>
@@ -747,7 +874,6 @@ export default function ReportView({
                     const exp = expenseList[idx];
                     return (
                       <tr key={idx}>
-                        {/* ฝั่งรายรับ */}
                         {inc ? (
                           <>
                             <td style={{ textAlign: 'center', color: 'var(--text-muted)' }}>{idx + 1}</td>
@@ -769,7 +895,6 @@ export default function ReportView({
                           </>
                         )}
 
-                        {/* ฝั่งรายจ่าย */}
                         {exp ? (
                           <>
                             <td style={{ textAlign: 'center', color: 'var(--text-muted)' }}>{idx + 1}</td>
@@ -818,19 +943,6 @@ export default function ReportView({
         {/* 4. โหมดเฉพาะรายการรายรับ (Income Only) */}
         {reportType !== 'summary' && viewMode === 'income_only' && (
           <div style={{ overflowX: 'auto', width: '100%', marginBottom: '1.5rem' }}>
-            <div className="report-table-header income">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <span className="report-badge-dot income"></span>
-                <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 700 }}>
-                  บัญชีรายการรายรับ (Income Records)
-                </h4>
-                <span className="report-badge income">{incomeList.length} รายการ</span>
-              </div>
-              <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>
-                ยอดรวมรายรับ: {totalIncomeAmount.toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท
-              </div>
-            </div>
-
             <table className="report-table">
               <thead>
                 <tr>
@@ -886,19 +998,6 @@ export default function ReportView({
         {/* 5. โหมดเฉพาะรายการรายจ่าย (Expense Only) */}
         {reportType !== 'summary' && viewMode === 'expense_only' && (
           <div style={{ overflowX: 'auto', width: '100%', marginBottom: '1.5rem' }}>
-            <div className="report-table-header expense">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <span className="report-badge-dot expense"></span>
-                <h4 style={{ margin: 0, fontSize: '1rem', fontWeight: 700 }}>
-                  บัญชีรายการรายจ่าย (Expense Records)
-                </h4>
-                <span className="report-badge expense">{expenseList.length} รายการ</span>
-              </div>
-              <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>
-                ยอดรวมรายจ่าย: {totalExpenseAmount.toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท
-              </div>
-            </div>
-
             <table className="report-table">
               <thead>
                 <tr>
@@ -951,144 +1050,79 @@ export default function ReportView({
           </div>
         )}
 
-        {/* 6. โหมดเดิม: รวมทุกรายการเรียงตามลำดับเวลา (Combined Chronological) */}
-        {reportType !== 'summary' && viewMode === 'combined' && (
+        {/* 6. โหมดรายงานสรุปยอดบัญชีรายเดือน (Summary Table) */}
+        {reportType === 'summary' && (
           <div style={{ overflowX: 'auto', width: '100%', marginBottom: '1.5rem' }}>
             <table className="report-table">
               <thead>
                 <tr>
-                  <th style={{ width: '6%', textAlign: 'center' }}>ลำดับ</th>
-                  <th style={{ width: '16%' }}>วัน/เดือน/ปี</th>
-                  <th style={{ width: '34%' }}>รายการธุรกรรม</th>
-                  <th style={{ width: '12%', textAlign: 'center' }}>ประเภท</th>
-                  <th style={{ width: '18%', textAlign: 'right' }}>จำนวนเงิน (บาท)</th>
-                  <th style={{ width: '14%' }}>ผู้ทำบันทึก</th>
+                  <th style={{ width: '25%' }}>เดือน</th>
+                  <th style={{ width: '20%', textAlign: 'right' }}>รายรับจริง (บาท)</th>
+                  <th style={{ width: '20%', textAlign: 'right' }}>รายจ่ายจริง (บาท)</th>
+                  <th style={{ width: '15%', textAlign: 'right' }}>ส่วนต่างประจำเดือน</th>
+                  <th style={{ width: '20%', textAlign: 'right' }}>ยอดคงเหลือสะสมสิ้นเดือน</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredData.length === 0 ? (
+                {monthlySummaryList.length === 0 ? (
                   <tr>
-                    <td colSpan="6" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '3rem' }}>
-                      📭 ไม่มีธุรกรรมที่เกิดขึ้นในช่วงเวลาดังกล่าว
+                    <td colSpan="5" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '3rem' }}>
+                      📭 ไม่มีข้อมูลประวัติรายเดือนเพื่อสรุปยอดในปีนี้
                     </td>
                   </tr>
                 ) : (
-                  filteredData.map((t, idx) => (
-                    <tr key={t.id || idx}>
-                      <td style={{ textAlign: 'center', color: 'var(--text-muted)' }}>{idx + 1}</td>
-                      <td>{formatThaiDate(t.date)}</td>
-                      <td>
-                        <div style={{ fontWeight: 500 }}>{t.description}</div>
-                        {t.note && (
-                          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                            หมายเหตุ: {t.note}
-                          </div>
-                        )}
+                  monthlySummaryList.map((m) => (
+                    <tr key={m.key}>
+                      <td style={{ fontWeight: 500 }}>{m.label}</td>
+                      <td style={{ textAlign: 'right', color: 'var(--success-dark, #2e7d32)', fontWeight: 500 }}>
+                        {m.income.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
                       </td>
-                      <td style={{ textAlign: 'center' }}>
-                        {isBroughtForward(t.description) ? (
-                          <span style={{ fontSize: '0.75rem', padding: '0.1rem 0.4rem', borderRadius: '4px', backgroundColor: '#FFF9E6', color: '#B78103', fontWeight: 600 }}>
-                            ยอดยกมา
-                          </span>
-                        ) : t.type === 'income' ? (
-                          <span style={{ fontSize: '0.75rem', padding: '0.1rem 0.4rem', borderRadius: '4px', backgroundColor: '#E8F5E9', color: '#1B5E20', fontWeight: 600 }}>
-                            รายรับ
-                          </span>
-                        ) : (
-                          <span style={{ fontSize: '0.75rem', padding: '0.1rem 0.4rem', borderRadius: '4px', backgroundColor: '#FFEBEE', color: '#B71C1C', fontWeight: 600 }}>
-                            รายจ่าย
-                          </span>
-                        )}
+                      <td style={{ textAlign: 'right', color: 'var(--danger-dark, #c62828)', fontWeight: 500 }}>
+                        {m.expense.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
                       </td>
-                      <td style={{ textAlign: 'right' }} className={`amount-text ${t.type === 'income' ? 'income' : 'expense'}`}>
-                        {t.type === 'income' ? '+' : '-'}{t.amount.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                      <td style={{ textAlign: 'right', fontWeight: 600, color: m.net >= 0 ? 'var(--success-dark, #2e7d32)' : 'var(--danger-dark, #c62828)' }}>
+                        {m.net >= 0 ? '+' : ''}{m.net.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
                       </td>
-                      <td>{t.created_by || '-'}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 700, color: m.balance >= 0 ? 'var(--primary-dark)' : 'var(--danger-dark, #c62828)' }}>
+                        {m.balance.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                      </td>
                     </tr>
                   ))
                 )}
               </tbody>
               <tfoot>
                 <tr className="report-subtotal-row">
-                  <td colSpan="4" style={{ textAlign: 'right', fontWeight: 700 }}>
-                    รวมรายรับ {totalIncomeAmount.toLocaleString('th-TH', { minimumFractionDigits: 2 })} | รวมรายจ่าย:
+                  <td style={{ fontWeight: 700 }}>รวมทั้งสิ้นทั้งปี (12 เดือน)</td>
+                  <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--success-dark, #2e7d32)' }}>
+                    {incomeSum.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
                   </td>
                   <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--danger-dark, #c62828)' }}>
-                    {totalExpenseAmount.toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท
+                    {expenseSum.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
                   </td>
-                  <td></td>
+                  <td style={{ textAlign: 'right', fontWeight: 700, color: netPeriodMargin >= 0 ? 'var(--success-dark, #2e7d32)' : 'var(--danger-dark, #c62828)' }}>
+                    {netPeriodMargin >= 0 ? '+' : ''}{netPeriodMargin.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                  </td>
+                  <td style={{ textAlign: 'right', fontWeight: 700, color: balanceSum >= 0 ? 'var(--primary-dark)' : 'var(--danger-dark, #c62828)' }}>
+                    {balanceSum.toLocaleString('th-TH', { minimumFractionDigits: 2 })}
+                  </td>
                 </tr>
               </tfoot>
             </table>
           </div>
         )}
 
-        {/* ตารางกล่องรวมสะสมตอนท้าย (Reconciliation Summary Box) */}
-        <div className="report-summary-box" style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', width: '100%', flexWrap: 'wrap' }}>
-          
-          {/* กล่องรายรับ */}
-          <div className="summary-item" style={{ flex: 1, minWidth: '130px', textAlign: 'center' }}>
-            <span className="summary-item-label">ยอดสะสมรายรับจริง</span>
-            <span className="summary-item-val" style={{ color: 'var(--success-dark, #2e7d32)', display: 'block', marginTop: '0.25rem' }}>
-              {incomeSum.toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท
-            </span>
-            {reportType !== 'summary' && (
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                ({incomeList.length} รายการ)
-              </span>
-            )}
-          </div>
-          
-          {/* กล่องยอดยกมา (ถ้ามี) */}
-          {broughtForwardAmount !== 0 && (
-            <>
-              <div style={{ width: '1px', backgroundColor: 'var(--border)' }}></div>
-              <div className="summary-item" style={{ flex: 1, minWidth: '130px', textAlign: 'center' }}>
-                <span className="summary-item-label">ยอดยกมาจากเดือนก่อน</span>
-                <span className="summary-item-val" style={{ color: broughtForwardAmount >= 0 ? 'var(--success-dark, #2e7d32)' : 'var(--danger-dark, #c62828)', display: 'block', marginTop: '0.25rem' }}>
-                  {broughtForwardAmount >= 0 ? '+' : ''}{broughtForwardAmount.toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท
-                </span>
-              </div>
-            </>
-          )}
-
-          {/* กล่องรายจ่าย */}
-          <div style={{ width: '1px', backgroundColor: 'var(--border)' }}></div>
-          <div className="summary-item" style={{ flex: 1, minWidth: '130px', textAlign: 'center' }}>
-            <span className="summary-item-label">ยอดสะสมรายจ่ายจริง</span>
-            <span className="summary-item-val" style={{ color: 'var(--danger-dark, #c62828)', display: 'block', marginTop: '0.25rem' }}>
-              {expenseSum.toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท
-            </span>
-            {reportType !== 'summary' && (
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                ({expenseList.length} รายการ)
-              </span>
-            )}
-          </div>
-
-          {/* กล่องผลต่างกำไร-ขาดทุนประจำงวด */}
-          <div style={{ width: '1px', backgroundColor: 'var(--border)' }}></div>
-          <div className="summary-item" style={{ flex: 1, minWidth: '130px', textAlign: 'center' }}>
-            <span className="summary-item-label">กำไร / ส่วนต่างประจำงวด</span>
-            <span className="summary-item-val" style={{ color: netPeriodMargin >= 0 ? 'var(--success-dark, #2e7d32)' : 'var(--danger-dark, #c62828)', display: 'block', marginTop: '0.25rem' }}>
-              {netPeriodMargin >= 0 ? '+' : ''}{netPeriodMargin.toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท
-            </span>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              {netPeriodMargin >= 0 ? 'ผลกำไรจากการดำเนินงาน' : 'รายจ่ายสูงกว่ารายรับ'}
-            </span>
-          </div>
-
-          {/* กล่องเงินคงเหลือสุทธิ */}
-          <div style={{ width: '1px', backgroundColor: 'var(--border)' }}></div>
-          <div className="summary-item" style={{ flex: 1, minWidth: '130px', textAlign: 'center' }}>
-            <span className="summary-item-label" style={{ fontWeight: 600 }}>ยอดเงินคงเหลือสะสมสุทธิ</span>
-            <span className="summary-item-val" style={{ color: balanceSum >= 0 ? 'var(--primary-dark)' : 'var(--danger-dark, #c62828)', fontWeight: 'bold', display: 'block', marginTop: '0.25rem' }}>
-              {balanceSum.toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท
-            </span>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              ยอดเงินคงคลัง ณ ปัจจุบัน
-            </span>
-          </div>
+        {/* ข้อแนะนำเพิ่มเติมสำหรับการตรวจสอบบัญชี (ตามแบบประเมินโรงเรียนวังน้ำเย็นวิทยาคมในเอกสารตัวอย่าง) */}
+        <div className="report-audit-notes">
+          <h5 style={{ fontWeight: 600, fontSize: '0.85rem', marginBottom: '0.4rem', color: '#4A2E18' }}>
+            📌 ข้อแนะนำเพิ่มเติมในการจัดทำบัญชี (ตามแนวทางการตรวจบัญชีของโรงเรียน):
+          </h5>
+          <ol style={{ fontSize: '0.78rem', color: '#5D4037', paddingLeft: '1.25rem', margin: 0, lineHeight: 1.6 }}>
+            <li>ควรเพิ่มช่องรายรับ รายจ่าย เงินคงเหลือ ในแต่ละวันให้ชัดเจน เพื่อความสะดวกในการตรวจสอบ</li>
+            <li>รายรับเงิน จากเงินโอน ควรแนบสเตทเม้นท์ (Bank Statement) เพื่อแสดงรายการรับเงินโอนรายวัน สำเนาสมุดบัญชีเงินฝากธนาคารทุกเดือน</li>
+            <li>ควรแนบหลักฐาน สมุดบัญชีเงินฝาก (ถ้ามี) ใบเสร็จการซื้อของ วัตถุดิบ วัสดุอุปกรณ์ หรือรายการอื่นๆ</li>
+            <li>ถ้าสามารถเช็คยอดสต็อก การขายเป็นจำนวนแก้ว จำนวนสินค้าได้ในแต่ละวัน จะดีมากเพื่อการวิเคราะห์ ประเมินผลประกอบการขาย</li>
+            <li>พยายามทำให้รัดกุมที่สุด เพื่อความโปร่งใสของหลักฐานบัญชีทางการเงิน</li>
+          </ol>
         </div>
 
         {/* ส่วนลายเซ็นท้ายรายงาน สำหรับการตรวจบัญชี */}
