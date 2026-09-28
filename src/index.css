@@ -1045,6 +1045,126 @@ a {
   color: var(--text-muted);
 }
 
+/* Report Table Headers & Separated Income/Expense Sections */
+.report-table-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.65rem 1rem;
+  border-radius: var(--radius-sm, 6px);
+  margin-bottom: 0.6rem;
+  border: 1px solid var(--border);
+}
+
+.report-table-header.income {
+  background-color: #E8F5E9;
+  border-color: #A5D6A7;
+  color: #1B5E20;
+}
+
+.report-table-header.expense {
+  background-color: #FFEBEE;
+  border-color: #FFCDD2;
+  color: #B71C1C;
+}
+
+.report-badge-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.report-badge-dot.income {
+  background-color: #2E7D32;
+}
+
+.report-badge-dot.expense {
+  background-color: #C62828;
+}
+
+.report-badge {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 12px;
+  font-weight: 600;
+}
+
+.report-badge.income {
+  background-color: #C8E6C9;
+  color: #1B5E20;
+}
+
+.report-badge.expense {
+  background-color: #FFCDD2;
+  color: #B71C1C;
+}
+
+.report-subtotal-row td {
+  background-color: #FBF8F5;
+  border-top: 1px solid #795548 !important;
+  border-bottom: 3px double #5D4037 !important;
+  font-weight: 600;
+}
+
+.report-dual-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.report-dual-table th, .report-dual-table td {
+  padding: 0.5rem 0.6rem;
+  font-size: 0.84rem;
+}
+
+.report-bf-notice {
+  background-color: #FFF9E6;
+  border: 1px solid #FFE082;
+  color: #B78103;
+  padding: 0.65rem 1rem;
+  border-radius: var(--radius-sm, 6px);
+  font-size: 0.85rem;
+  margin-bottom: 1.25rem;
+}
+
+/* View Mode Selector Tabs / Segmented Buttons */
+.report-view-toggle {
+  display: inline-flex;
+  background-color: #F0EAE1;
+  border-radius: var(--radius-md, 8px);
+  padding: 0.25rem;
+  gap: 0.25rem;
+  border: 1px solid #DDD0C0;
+  flex-wrap: wrap;
+}
+
+.report-toggle-btn {
+  border: none;
+  background: transparent;
+  padding: 0.45rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #5D4037;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  transition: all 0.15s ease-in-out;
+  white-space: nowrap;
+}
+
+.report-toggle-btn:hover {
+  background-color: rgba(255, 255, 255, 0.7);
+}
+
+.report-toggle-btn.active {
+  background-color: var(--primary-brown, #4A2E18);
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+}
+
 /* @media print: Custom Styles to output perfectly styled PDF */
 @media print {
   @page {
@@ -1134,9 +1254,79 @@ a {
     color: black !important;
   }
 
+  .report-table-header {
+    border: 1px solid #000000 !important;
+    background-color: #f2f2f2 !important;
+    color: #000000 !important;
+    padding: 5px 10px !important;
+    margin-top: 15px !important;
+    margin-bottom: 5px !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+
+  .report-table-header.income,
+  .report-table-header.expense {
+    background-color: #f2f2f2 !important;
+    border-color: #000000 !important;
+    color: #000000 !important;
+  }
+
+  .report-table-header h4 {
+    color: #000000 !important;
+    font-size: 10.5pt !important;
+    font-weight: bold !important;
+  }
+
+  .report-badge-dot {
+    display: none !important;
+  }
+
+  .report-badge {
+    border: 1px solid #000000 !important;
+    background: transparent !important;
+    color: #000000 !important;
+    font-size: 8.5pt !important;
+    padding: 1px 6px !important;
+  }
+
+  .report-subtotal-row td {
+    background-color: #f5f5f5 !important;
+    border-top: 1px solid #000000 !important;
+    border-bottom: 3px double #000000 !important;
+    color: #000000 !important;
+    font-weight: bold !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .report-dual-table {
+    font-size: 8.5pt !important;
+  }
+
+  .report-dual-table th, .report-dual-table td {
+    padding: 4px 6px !important;
+    font-size: 8.5pt !important;
+  }
+
+  .report-bf-notice {
+    border: 1px solid #000000 !important;
+    background-color: #fafafa !important;
+    color: #000000 !important;
+    padding: 5px 10px !important;
+    font-size: 9pt !important;
+    margin-bottom: 10px !important;
+  }
+
+  .report-view-toggle {
+    display: none !important;
+  }
+
   .report-signatures {
     page-break-inside: avoid;
-    margin-top: 80px !important;
+    margin-top: 60px !important;
   }
 }
 
