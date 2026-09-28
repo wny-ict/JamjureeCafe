@@ -536,11 +536,6 @@ export default function ReportView({
           </h3>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
             {getReportTitle()}
-            {reportType !== 'summary' && (
-              <strong style={{ marginLeft: '0.5rem', color: 'var(--primary-dark)' }}>
-                • {getViewModeLabel()}
-              </strong>
-            )}
           </p>
         </div>
 
@@ -1111,19 +1106,6 @@ export default function ReportView({
           </div>
         )}
 
-        {/* ข้อแนะนำเพิ่มเติมสำหรับการตรวจสอบบัญชี (ตามแบบประเมินโรงเรียนวังน้ำเย็นวิทยาคมในเอกสารตัวอย่าง) */}
-        <div className="report-audit-notes">
-          <h5 style={{ fontWeight: 600, fontSize: '0.85rem', marginBottom: '0.4rem', color: '#4A2E18' }}>
-            📌 ข้อแนะนำเพิ่มเติมในการจัดทำบัญชี (ตามแนวทางการตรวจบัญชีของโรงเรียน):
-          </h5>
-          <ol style={{ fontSize: '0.78rem', color: '#5D4037', paddingLeft: '1.25rem', margin: 0, lineHeight: 1.6 }}>
-            <li>ควรเพิ่มช่องรายรับ รายจ่าย เงินคงเหลือ ในแต่ละวันให้ชัดเจน เพื่อความสะดวกในการตรวจสอบ</li>
-            <li>รายรับเงิน จากเงินโอน ควรแนบสเตทเม้นท์ (Bank Statement) เพื่อแสดงรายการรับเงินโอนรายวัน สำเนาสมุดบัญชีเงินฝากธนาคารทุกเดือน</li>
-            <li>ควรแนบหลักฐาน สมุดบัญชีเงินฝาก (ถ้ามี) ใบเสร็จการซื้อของ วัตถุดิบ วัสดุอุปกรณ์ หรือรายการอื่นๆ</li>
-            <li>ถ้าสามารถเช็คยอดสต็อก การขายเป็นจำนวนแก้ว จำนวนสินค้าได้ในแต่ละวัน จะดีมากเพื่อการวิเคราะห์ ประเมินผลประกอบการขาย</li>
-            <li>พยายามทำให้รัดกุมที่สุด เพื่อความโปร่งใสของหลักฐานบัญชีทางการเงิน</li>
-          </ol>
-        </div>
 
         {/* ส่วนลายเซ็นท้ายรายงาน สำหรับการตรวจบัญชี */}
         <div className="report-signatures">
